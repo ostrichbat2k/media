@@ -158,7 +158,7 @@ public final class FfmpegAudioRenderer extends DecoderAudioRenderer<FfmpegAudioD
         format.maxInputSize != Format.NO_VALUE ? format.maxInputSize : DEFAULT_INPUT_BUFFER_SIZE;
     FfmpegAudioDecoder decoder =
         new FfmpegAudioDecoder(
-            format, NUM_BUFFERS, NUM_BUFFERS, initialInputBufferSize, shouldOutputFloat(format));
+            format, NUM_BUFFERS, NUM_BUFFERS, initialInputBufferSize, chooseOutputMode(format));
     TraceUtil.endSection();
     return decoder;
   }
@@ -183,10 +183,38 @@ public final class FfmpegAudioRenderer extends DecoderAudioRenderer<FfmpegAudioD
         Util.getPcmFormat(pcmEncoding, inputFormat.channelCount, inputFormat.sampleRate));
   }
 
-  private boolean shouldOutputFloat(Format inputFormat) {
+  /**
+   * Picks which of {@link FfmpegAudioDecoder}'s {@code OUTPUT_MODE_*} constants to decode with.
+   *
+   * <p>Can't gate {@link FfmpegAudioDecoder#OUTPUT_MODE_NATIVE_INTEGER} on direct 32-bit integer
+   * sink support -- {@link DefaultAudioSink#configure} unconditionally routes any {@code
+   * MimeTypes#AUDIO_RAW} input through exactly one of two fixed internal processors,
+   * {@code ToInt16PcmAudioProcessor} or {@code ToFloatPcmAudioProcessor} (chosen by {@code
+   * DefaultAudioSink.shouldUseFloatOutput}, itself keyed on {@code
+   * Util.isEncodingHighResolutionPcm} and the sink's own {@code enableFloatOutput} flag), before
+   * the {@code AudioOutputProvider} -- our sink -- ever sees the format. A 32-bit integer probe
+   * therefore never reaches {@code UsbAudioOutputProvider} as 32-bit at all; it's silently
+   * rewritten to float (if {@code enableFloatOutput}, which the USB sink sets) or forced down to
+   * plain 16-bit, so {@code sinkSupportsFormat(format, ENCODING_PCM_32BIT)} can never genuinely
+   * return true and gating on it (confirmed, reproduced: it silently forced every >16-bit source,
+   * including a genuine 24-bit FLAC, down to 16-bit with zero warning) is dead code masquerading
+   * as a feature.
+   *
+   * <p>Float is the one encoding that *does* reach the sink unmodified for a wide source (it's
+   * already float, so neither rewrite branch above fires), so it's still the real gate here --
+   * {@link FfmpegAudioDecoder#OUTPUT_MODE_NATIVE_INTEGER} is only used when the sink directly
+   * supports 16-bit (so a genuinely-16-bit source's decode, which {@code
+   * OUTPUT_MODE_NATIVE_INTEGER} picks on its own real bit depth -- see that mode's doc comment --
+   * reaches the sink as plain 16-bit, via {@code ToInt16PcmAudioProcessor}, a no-op for already-
+   * 16-bit data) AND float directly (so a genuinely-wider source's 32-bit decode gets converted,
+   * losslessly, by ExoPlayer's own standard {@code ToFloatPcmAudioProcessor} -- exactly once,
+   * and only when the source genuinely needs it, instead of this renderer forcing every track
+   * through float decode up front the way the original {@code shouldOutputFloat} always did).
+   */
+  private int chooseOutputMode(Format inputFormat) {
     if (!sinkSupportsFormat(inputFormat, C.ENCODING_PCM_16BIT)) {
       // We have no choice because the sink doesn't support 16-bit integer PCM.
-      return true;
+      return FfmpegAudioDecoder.OUTPUT_MODE_PCM_FLOAT;
     }
 
     @SinkFormatSupport
@@ -196,14 +224,16 @@ public final class FfmpegAudioRenderer extends DecoderAudioRenderer<FfmpegAudioD
                 C.ENCODING_PCM_FLOAT, inputFormat.channelCount, inputFormat.sampleRate));
     switch (formatSupport) {
       case SINK_FORMAT_SUPPORTED_DIRECTLY:
-        // AC-3 is always 16-bit, so there's no point using floating point. Assume that it's worth
-        // using for all other formats.
-        return !MimeTypes.AUDIO_AC3.equals(inputFormat.sampleMimeType);
+        // AC-3 is always 16-bit, so there's no point using floating point. For every other
+        // format, let the decoder pick 16-bit or 32-bit for itself based on the real source.
+        return MimeTypes.AUDIO_AC3.equals(inputFormat.sampleMimeType)
+            ? FfmpegAudioDecoder.OUTPUT_MODE_PCM_16BIT
+            : FfmpegAudioDecoder.OUTPUT_MODE_NATIVE_INTEGER;
       case SINK_FORMAT_UNSUPPORTED:
       case SINK_FORMAT_SUPPORTED_WITH_TRANSCODING:
       default:
         // Always prefer 16-bit PCM if the sink does not provide direct support for floating point.
-        return false;
+        return FfmpegAudioDecoder.OUTPUT_MODE_PCM_16BIT;
     }
   }
 }
