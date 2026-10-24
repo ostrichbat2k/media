@@ -59,3 +59,17 @@ if(ANDROID_ABI STREQUAL "arm64-v8a")
     target_link_options(ffmpegJNI PRIVATE "-Wl,-Bsymbolic")
 endif()
 
+# Arm Memory Tagging Extension (MTE), debug-only diagnostic instrumentation -- see
+# libusbdac/src/main/cpp/CMakeLists.txt for the full rationale. Only instruments this file
+# (ffmpeg_jni.cc) itself, e.g. the new DecoderContext new/delete and decodePacket buffer sizing
+# added for OUTPUT_MODE_NATIVE_INTEGER -- avcodec/avutil/swresample are prebuilt static libs
+# (see ffmpeg_lib_file_path above) that were never compiled with this instrumentation, so a bug
+# purely inside FFmpeg's own decode internals won't be caught by stack tagging here (heap tagging,
+# via the app's android:memtagMode manifest setting, still applies process-wide regardless).
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND ANDROID_ABI STREQUAL "arm64-v8a")
+    target_compile_options(ffmpegJNI PRIVATE
+            -fsanitize=memtag -fno-omit-frame-pointer -march=armv8-a+memtag)
+    target_link_options(ffmpegJNI PRIVATE
+            -fsanitize=memtag -fsanitize-memtag-mode=sync -march=armv8-a+memtag)
+endif()
+

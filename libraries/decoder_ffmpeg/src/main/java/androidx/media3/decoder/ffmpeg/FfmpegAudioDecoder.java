@@ -41,6 +41,25 @@ public final class FfmpegAudioDecoder
   private static final int AUDIO_DECODER_ERROR_INVALID_DATA = -1;
   private static final int AUDIO_DECODER_ERROR_OTHER = -2;
 
+  // Mirrors ffmpeg_jni.cc's OUTPUT_MODE_* constants exactly -- passed straight through to
+  // native as the raw int, not re-derived there.
+  // LINT.IfChange
+  /** Forces every track down to 16-bit integer PCM, matching this decoder's original behavior. */
+  public static final int OUTPUT_MODE_PCM_16BIT = 0;
+  /** Forces decode to 32-bit float, matching this decoder's original "outputFloat" behavior. */
+  public static final int OUTPUT_MODE_PCM_FLOAT = 1;
+  /**
+   * Requests whichever integer PCM depth (16-bit or 32-bit) exactly matches the real source's
+   * own native bit depth, with no float round-trip -- see ffmpeg_jni.cc's doc comment on its own
+   * {@code OUTPUT_MODE_NATIVE_INTEGER} for how FFmpeg's own lossless decoders (FLAC/ALAC/PCM)
+   * already make this decision correctly on their own once we stop forcing them wider. The real
+   * resulting depth isn't known until {@link #getEncoding()} is read after the first {@link
+   * #decode} call succeeds -- mirrors how {@link #getChannelCount()}/{@link #getSampleRate()}
+   * are already only trusted post-decode.
+   */
+  public static final int OUTPUT_MODE_NATIVE_INTEGER = 2;
+  // LINT.ThenChange(../../../../../../jni/ffmpeg_jni.cc)
+
   // FLAC parsing constants
   private static final byte[] flacStreamMarker = {'f', 'L', 'a', 'C'};
   private static final int FLAC_METADATA_TYPE_STREAM_INFO = 0;
@@ -49,20 +68,24 @@ public final class FfmpegAudioDecoder
 
   private final String codecName;
   @Nullable private final byte[] extraData;
-  private final @C.PcmEncoding int encoding;
+  private final int outputMode;
   private int outputBufferSize;
 
   private long nativeContext; // May be reassigned on resetting the codec.
   private boolean hasOutputFormat;
   private volatile int channelCount;
   private volatile int sampleRate;
+  // Fixed for OUTPUT_MODE_PCM_16BIT/OUTPUT_MODE_PCM_FLOAT; for OUTPUT_MODE_NATIVE_INTEGER this
+  // starts as a placeholder and is corrected to the real depth in decode(), the same way
+  // channelCount/sampleRate above are -- see OUTPUT_MODE_NATIVE_INTEGER's doc comment.
+  private volatile @C.PcmEncoding int encoding;
 
   public FfmpegAudioDecoder(
       Format format,
       int numInputBuffers,
       int numOutputBuffers,
       int initialInputBufferSize,
-      boolean outputFloat)
+      int outputMode)
       throws FfmpegDecoderException {
     super(new DecoderInputBuffer[numInputBuffers], new SimpleDecoderOutputBuffer[numOutputBuffers]);
     if (!FfmpegLibrary.isAvailable()) {
@@ -71,11 +94,15 @@ public final class FfmpegAudioDecoder
     checkNotNull(format.sampleMimeType);
     codecName = checkNotNull(FfmpegLibrary.getCodecName(format.sampleMimeType));
     extraData = getExtraData(format.sampleMimeType, format.initializationData);
-    encoding = outputFloat ? C.ENCODING_PCM_FLOAT : C.ENCODING_PCM_16BIT;
+    this.outputMode = outputMode;
+    encoding =
+        outputMode == OUTPUT_MODE_PCM_FLOAT ? C.ENCODING_PCM_FLOAT : C.ENCODING_PCM_16BIT;
     outputBufferSize =
-        outputFloat ? INITIAL_OUTPUT_BUFFER_SIZE_32BIT : INITIAL_OUTPUT_BUFFER_SIZE_16BIT;
+        outputMode == OUTPUT_MODE_PCM_16BIT
+            ? INITIAL_OUTPUT_BUFFER_SIZE_16BIT
+            : INITIAL_OUTPUT_BUFFER_SIZE_32BIT;
     nativeContext =
-        ffmpegInitialize(codecName, extraData, outputFloat, format.sampleRate, format.channelCount);
+        ffmpegInitialize(codecName, extraData, outputMode, format.sampleRate, format.channelCount);
     if (nativeContext == 0) {
       throw new FfmpegDecoderException("Initialization failed.");
     }
@@ -143,6 +170,15 @@ public final class FfmpegAudioDecoder
         ParsableByteArray parsableExtraData = new ParsableByteArray(extraData);
         parsableExtraData.setPosition(extraData.length - 4);
         sampleRate = parsableExtraData.readUnsignedIntToInt();
+      }
+      if (outputMode == OUTPUT_MODE_NATIVE_INTEGER) {
+        // Only knowable now -- ffmpeg_jni.cc's OUTPUT_MODE_NATIVE_INTEGER lets the native
+        // decoder (FLAC/ALAC/PCM) pick 16-bit or 32-bit for itself based on the real source,
+        // and that choice isn't guaranteed final until a frame has actually been decoded.
+        encoding =
+            ffmpegGetOutputEncodingBits(nativeContext) >= 32
+                ? C.ENCODING_PCM_32BIT
+                : C.ENCODING_PCM_16BIT;
       }
       hasOutputFormat = true;
     }
@@ -300,7 +336,7 @@ public final class FfmpegAudioDecoder
   private native long ffmpegInitialize(
       String codecName,
       @Nullable byte[] extraData,
-      boolean outputFloat,
+      int outputMode,
       int rawSampleRate,
       int rawChannelCount);
 
@@ -315,6 +351,8 @@ public final class FfmpegAudioDecoder
   private native int ffmpegGetChannelCount(long context);
 
   private native int ffmpegGetSampleRate(long context);
+
+  private native int ffmpegGetOutputEncodingBits(long context);
 
   private native long ffmpegReset(long context, @Nullable byte[] extraData);
 
