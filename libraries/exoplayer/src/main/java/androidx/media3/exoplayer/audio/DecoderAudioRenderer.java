@@ -37,6 +37,7 @@ import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.AuxEffectInfo;
 import androidx.media3.common.C;
 import androidx.media3.common.Format;
+import androidx.media3.common.Metadata;
 import androidx.media3.common.MimeTypes;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.PlaybackParameters;
@@ -499,12 +500,21 @@ public abstract class DecoderAudioRenderer<
     nextBufferToWritePresentationTimeUs = C.TIME_UNSET;
 
     if (audioTrackNeedsConfigure) {
+      Format decoderOutputFormat = getOutputFormat(decoder);
+      // Append rather than overwrite -- getOutputFormat() may have attached its own metadata
+      // (e.g. FfmpegAudioRenderer's RawSampleBitsData), which inputFormat.metadata (the
+      // compressed source's own container-level metadata, e.g. ID3/MP4 tags) knows nothing
+      // about and must not clobber.
+      Metadata metadata =
+          decoderOutputFormat.metadata == null
+              ? inputFormat.metadata
+              : decoderOutputFormat.metadata.copyWithAppendedEntriesFrom(inputFormat.metadata);
       Format outputFormat =
-          getOutputFormat(decoder)
+          decoderOutputFormat
               .buildUpon()
               .setEncoderDelay(encoderDelay)
               .setEncoderPadding(encoderPadding)
-              .setMetadata(inputFormat.metadata)
+              .setMetadata(metadata)
               .setCustomData(inputFormat.customData)
               .setId(inputFormat.id)
               .setLabel(inputFormat.label)
