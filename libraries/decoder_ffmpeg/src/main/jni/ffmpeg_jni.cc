@@ -275,6 +275,20 @@ AUDIO_DECODER_FUNC(jint, ffmpegGetOutputEncodingBits, jlong context) {
   return (jint)av_get_bytes_per_sample(((AVCodecContext*)context)->sample_fmt) * 8;
 }
 
+// Returns the codec's own declared real bit depth for the raw/undecoded source, independent of
+// sample_fmt's container width. AVSampleFormat has no native 24-bit slot, so a genuine 24-bit
+// FLAC/ALAC source and a genuinely 32-bit-precision source both report sample_fmt=S32 --
+// ffmpegGetOutputEncodingBits returns 32 for both -- but bits_per_raw_sample keeps tracking the
+// real value (e.g. 24) separately, same as FLAC's own flac_set_bps already does internally. Only
+// meaningful once a frame has been decoded, same as ffmpegGetOutputEncodingBits.
+AUDIO_DECODER_FUNC(jint, ffmpegGetBitsPerRawSample, jlong context) {
+  if (!context) {
+    LOGE("Context must be non-NULL.");
+    return 0;
+  }
+  return (jint)((AVCodecContext*)context)->bits_per_raw_sample;
+}
+
 AUDIO_DECODER_FUNC(jlong, ffmpegReset, jlong jContext, jbyteArray extraData) {
   AVCodecContext* context = (AVCodecContext*)jContext;
   if (!context) {
