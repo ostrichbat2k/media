@@ -79,6 +79,11 @@ public final class FfmpegAudioDecoder
   // starts as a placeholder and is corrected to the real depth in decode(), the same way
   // channelCount/sampleRate above are -- see OUTPUT_MODE_NATIVE_INTEGER's doc comment.
   private volatile @C.PcmEncoding int encoding;
+  // The source's real bit depth (e.g. 24), separate from encoding's output container width
+  // (which FFmpeg can only ever report as 16 or 32 -- see getBitsPerRawSample()'s doc comment).
+  // Only set for OUTPUT_MODE_NATIVE_INTEGER, the same way encoding is corrected in decode();
+  // C.LENGTH_UNSET otherwise or before the first successful decode() call.
+  private volatile int bitsPerRawSample = C.LENGTH_UNSET;
 
   public FfmpegAudioDecoder(
       Format format,
@@ -175,10 +180,13 @@ public final class FfmpegAudioDecoder
         // Only knowable now -- ffmpeg_jni.cc's OUTPUT_MODE_NATIVE_INTEGER lets the native
         // decoder (FLAC/ALAC/PCM) pick 16-bit or 32-bit for itself based on the real source,
         // and that choice isn't guaranteed final until a frame has actually been decoded.
-        encoding =
-            ffmpegGetOutputEncodingBits(nativeContext) >= 32
-                ? C.ENCODING_PCM_32BIT
-                : C.ENCODING_PCM_16BIT;
+        int outputEncodingBits = ffmpegGetOutputEncodingBits(nativeContext);
+        encoding = outputEncodingBits >= 32 ? C.ENCODING_PCM_32BIT : C.ENCODING_PCM_16BIT;
+        // bits_per_raw_sample is 0 for a codec that never sets it (e.g. raw PCM, which has no
+        // narrower "real" depth to report beyond its own container width) -- fall back to the
+        // container width itself rather than exposing that 0 as if it meant something.
+        int rawBitsPerSample = ffmpegGetBitsPerRawSample(nativeContext);
+        bitsPerRawSample = rawBitsPerSample > 0 ? rawBitsPerSample : outputEncodingBits;
       }
       hasOutputFormat = true;
     }
@@ -218,6 +226,22 @@ public final class FfmpegAudioDecoder
   /** Returns the encoding of output audio. */
   public @C.PcmEncoding int getEncoding() {
     return encoding;
+  }
+
+  /**
+   * Returns the real bit depth of the raw/undecoded source (e.g. 24), as reported by FFmpeg's own
+   * {@code AVCodecContext.bits_per_raw_sample} -- distinct from {@link #getEncoding()}'s output
+   * container width, which FFmpeg can only ever report as 16 or 32 ({@code AVSampleFormat} has no
+   * native 24-bit slot, so a genuine 24-bit FLAC/ALAC source and a genuinely 32-bit-precision
+   * source both land on {@link C#ENCODING_PCM_32BIT}). A downstream consumer can use this to tell
+   * the two apart -- e.g. to route a 24-bit-real source to a device's narrower 24-bit alt-setting
+   * via an exact byte-drop instead of its wider 32-bit one.
+   *
+   * <p>Only ever set for {@link #OUTPUT_MODE_NATIVE_INTEGER}; returns {@link C#LENGTH_UNSET}
+   * otherwise, or before this decoder's first successful {@link #decode} call.
+   */
+  public int getBitsPerRawSample() {
+    return bitsPerRawSample;
   }
 
   /**
@@ -353,6 +377,8 @@ public final class FfmpegAudioDecoder
   private native int ffmpegGetSampleRate(long context);
 
   private native int ffmpegGetOutputEncodingBits(long context);
+
+  private native int ffmpegGetBitsPerRawSample(long context);
 
   private native long ffmpegReset(long context, @Nullable byte[] extraData);
 
