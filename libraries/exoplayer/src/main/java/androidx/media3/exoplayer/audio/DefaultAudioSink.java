@@ -686,6 +686,9 @@ public final class DefaultAudioSink implements AudioSink {
 
   @Override
   public @SinkFormatSupport int getFormatSupport(Format format) {
+    if (isDirectWideIntegerPcm(format)) {
+      return SINK_FORMAT_SUPPORTED_DIRECTLY;
+    }
     // For PCM formats, convert the format to what our audio processors will produce.
     boolean transcodingViaAudioProcessors = false;
     if (Util.isEncodingLinearPcm(format.pcmEncoding)) {
@@ -742,6 +745,7 @@ public final class DefaultAudioSink implements AudioSink {
     int inputPcmFrameSize;
     int outputPcmFrameSize;
     Format afterProcessingFormat;
+    boolean isDirectWideIntegerPcm;
 
     maybeAddAudioOutputProviderListener();
 
@@ -751,9 +755,13 @@ public final class DefaultAudioSink implements AudioSink {
 
       inputPcmFrameSize = Util.getPcmFrameSize(inputFormat.pcmEncoding, inputFormat.channelCount);
 
+      isDirectWideIntegerPcm = isDirectWideIntegerPcm(inputFormat);
       ImmutableList.Builder<AudioProcessor> pipelineProcessors = new ImmutableList.Builder<>();
       pipelineProcessors.addAll(availableAudioProcessors);
-      if (shouldUseFloatOutput(inputFormat.pcmEncoding)) {
+      if (isDirectWideIntegerPcm) {
+        // The provider accepts this literal wide-integer encoding directly -- leave it untouched
+        // rather than forcing it through toFloatPcmAudioProcessor or toInt16PcmAudioProcessor.
+      } else if (shouldUseFloatOutput(inputFormat.pcmEncoding)) {
         pipelineProcessors.add(toFloatPcmAudioProcessor);
       } else {
         pipelineProcessors.add(toInt16PcmAudioProcessor);
@@ -797,6 +805,7 @@ public final class DefaultAudioSink implements AudioSink {
       inputPcmFrameSize = C.LENGTH_UNSET;
       outputPcmFrameSize = C.LENGTH_UNSET;
       afterProcessingFormat = inputFormat;
+      isDirectWideIntegerPcm = false;
     }
 
     OutputConfig outputConfig;
@@ -832,7 +841,8 @@ public final class DefaultAudioSink implements AudioSink {
             outputConfig,
             audioProcessingPipeline,
             audioSinkConfig.timeline,
-            audioSinkConfig.mediaPeriodId != null ? audioSinkConfig.mediaPeriodId.periodUid : null);
+            audioSinkConfig.mediaPeriodId != null ? audioSinkConfig.mediaPeriodId.periodUid : null,
+            isDirectWideIntegerPcm);
     if (isAudioOutputInitialized()) {
       this.pendingConfiguration = pendingConfiguration;
     } else {
@@ -1716,10 +1726,15 @@ public final class DefaultAudioSink implements AudioSink {
     //   https://github.com/google/ExoPlayer/issues/4803);
     // - when playing encoded audio via passthrough/offload, because modifying the audio stream
     //   would require decoding/re-encoding; and
-    // - when outputting float PCM audio, because SonicAudioProcessor outputs 16-bit integer PCM.
+    // - when outputting float PCM audio, because SonicAudioProcessor outputs 16-bit integer PCM;
+    //   and
+    // - when passing a literal wide-integer PCM encoding straight through to the provider,
+    //   because that path (like the float-output path above) never adds the audioProcessorChain
+    //   to the pipeline either -- see isDirectWideIntegerPcm().
     return !tunneling
         && configuration.isPcm()
-        && !shouldUseFloatOutput(configuration.inputFormat.pcmEncoding);
+        && !shouldUseFloatOutput(configuration.inputFormat.pcmEncoding)
+        && !configuration.isDirectWideIntegerPcm;
   }
 
   private boolean useAudioOutputPlaybackParams() {
@@ -1732,6 +1747,29 @@ public final class DefaultAudioSink implements AudioSink {
    */
   private boolean shouldUseFloatOutput(@C.PcmEncoding int pcmEncoding) {
     return enableFloatOutput && Util.isEncodingHighResolutionPcm(pcmEncoding);
+  }
+
+  /**
+   * Returns whether {@code format}'s PCM encoding is a genuine wide-integer encoding (24- or
+   * 32-bit, not float/double) that {@link #audioOutputProvider} can accept directly, as-is.
+   *
+   * <p>Without this check, any source wider than 16 bits is unconditionally routed through {@link
+   * #toFloatPcmAudioProcessor} (when {@link #shouldUseFloatOutput} is true) before a custom
+   * provider is ever asked what it can take directly. For a genuinely 32-bit source, that
+   * round-trip through float32's 24-bit mantissa irreversibly rounds away the bottom ~8 bits, even
+   * when the real provider (e.g. libusbdac's {@code UsbAudioOutputProvider}) already has a
+   * matching native-integer path waiting for exactly this encoding.
+   */
+  private boolean isDirectWideIntegerPcm(Format format) {
+    int pcmEncoding = format.pcmEncoding;
+    if (pcmEncoding != C.ENCODING_PCM_24BIT
+        && pcmEncoding != C.ENCODING_PCM_24BIT_BIG_ENDIAN
+        && pcmEncoding != C.ENCODING_PCM_32BIT
+        && pcmEncoding != C.ENCODING_PCM_32BIT_BIG_ENDIAN) {
+      return false;
+    }
+    return audioOutputProvider.getFormatSupport(getFormatConfig(format)).supportLevel
+        == AudioOutputProvider.FORMAT_SUPPORTED_DIRECTLY;
   }
 
   /**
@@ -2076,6 +2114,7 @@ public final class DefaultAudioSink implements AudioSink {
     private final AudioProcessingPipeline audioProcessingPipeline;
     private final Timeline timeline;
     @Nullable private final Object periodUid;
+    private final boolean isDirectWideIntegerPcm;
 
     private Configuration(
         Format inputFormat,
@@ -2085,7 +2124,8 @@ public final class DefaultAudioSink implements AudioSink {
         OutputConfig outputConfig,
         AudioProcessingPipeline audioProcessingPipeline,
         Timeline timeline,
-        @Nullable Object periodUid) {
+        @Nullable Object periodUid,
+        boolean isDirectWideIntegerPcm) {
       this.inputFormat = inputFormat;
       this.afterProcessingInputFormat = afterProcessingInputFormat;
       this.inputPcmFrameSize = inputPcmFrameSize;
@@ -2094,6 +2134,7 @@ public final class DefaultAudioSink implements AudioSink {
       this.audioProcessingPipeline = audioProcessingPipeline;
       this.timeline = timeline;
       this.periodUid = periodUid;
+      this.isDirectWideIntegerPcm = isDirectWideIntegerPcm;
     }
 
     private Configuration copyWithOutputConfig(OutputConfig outputConfig) {
@@ -2105,7 +2146,8 @@ public final class DefaultAudioSink implements AudioSink {
           outputConfig,
           audioProcessingPipeline,
           timeline,
-          periodUid);
+          periodUid,
+          isDirectWideIntegerPcm);
     }
 
     private long inputFramesToDurationUs(long frameCount) {
