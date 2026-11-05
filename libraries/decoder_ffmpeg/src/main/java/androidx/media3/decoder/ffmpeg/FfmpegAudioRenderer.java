@@ -25,6 +25,7 @@ import android.os.Handler;
 import androidx.annotation.Nullable;
 import androidx.media3.common.C;
 import androidx.media3.common.Format;
+import androidx.media3.common.Metadata;
 import androidx.media3.common.MimeTypes;
 import androidx.media3.common.audio.AudioProcessor;
 import androidx.media3.common.util.TraceUtil;
@@ -166,12 +167,20 @@ public final class FfmpegAudioRenderer extends DecoderAudioRenderer<FfmpegAudioD
   @Override
   protected Format getOutputFormat(FfmpegAudioDecoder decoder) {
     checkNotNull(decoder);
-    return new Format.Builder()
-        .setSampleMimeType(MimeTypes.AUDIO_RAW)
-        .setChannelCount(decoder.getChannelCount())
-        .setSampleRate(decoder.getSampleRate())
-        .setPcmEncoding(decoder.getEncoding())
-        .build();
+    Format.Builder formatBuilder =
+        new Format.Builder()
+            .setSampleMimeType(MimeTypes.AUDIO_RAW)
+            .setChannelCount(decoder.getChannelCount())
+            .setSampleRate(decoder.getSampleRate())
+            .setPcmEncoding(decoder.getEncoding());
+    int bitsPerRawSample = decoder.getBitsPerRawSample();
+    if (bitsPerRawSample != C.LENGTH_UNSET) {
+      // Only ever set for OUTPUT_MODE_NATIVE_INTEGER -- see getBitsPerRawSample()'s own doc
+      // comment. Carried via metadata, not a first-class Format field, since it's meaningful to
+      // only one specific downstream AudioOutputProvider rather than every Format consumer.
+      formatBuilder.setMetadata(new Metadata(new RawSampleBitsData(bitsPerRawSample)));
+    }
+    return formatBuilder.build();
   }
 
   /**
