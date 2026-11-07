@@ -231,6 +231,26 @@ jint ffmpegGetOutputEncodingBits(JNIEnv* env, jobject thiz, jlong context) {
   return (jint)av_get_bytes_per_sample(((AVCodecContext*)context)->sample_fmt) * 8;
 }
 
+// Only meaningful, and only ever called by Java, when this context was created with
+// OUTPUT_MODE_NATIVE_INTEGER. Reports whether the bytes ffmpegGetOutputEncodingBits' width
+// describes are actually floating-point, not integer PCM. OUTPUT_MODE_NATIVE_INTEGER sets
+// request_sample_fmt to S16, but that's only a hint -- FFmpeg's lossy decoders (AAC, Vorbis,
+// MP3, Opus) ignore it and decode natively to FLTP/FLT regardless. decodePacket() already
+// de-planarizes via av_get_packed_sample_fmt(context->sample_fmt) without forcing an int/float
+// conversion, so the output buffer genuinely contains float samples in that case -- this mirrors
+// that exact same computation so the two never disagree about what was actually written.
+jboolean ffmpegGetOutputIsFloat(JNIEnv* env, jobject thiz, jlong context) {
+  if (!context) {
+    LOGE("Context must be non-NULL.");
+    return JNI_FALSE;
+  }
+  AVSampleFormat packedFormat =
+      av_get_packed_sample_fmt(((AVCodecContext*)context)->sample_fmt);
+  return (packedFormat == AV_SAMPLE_FMT_FLT || packedFormat == AV_SAMPLE_FMT_DBL)
+             ? JNI_TRUE
+             : JNI_FALSE;
+}
+
 // Returns the codec's own declared real bit depth for the raw/undecoded source, independent of
 // sample_fmt's container width. AVSampleFormat has no native 24-bit slot, so a genuine 24-bit
 // FLAC/ALAC source and a genuinely 32-bit-precision source both report sample_fmt=S32 --
@@ -499,6 +519,8 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved) {
        reinterpret_cast<void*>(ffmpegGetSampleRate)},
       {"ffmpegGetOutputEncodingBits", "(J)I",
        reinterpret_cast<void*>(ffmpegGetOutputEncodingBits)},
+      {"ffmpegGetOutputIsFloat", "(J)Z",
+       reinterpret_cast<void*>(ffmpegGetOutputIsFloat)},
       {"ffmpegGetBitsPerRawSample", "(J)I",
        reinterpret_cast<void*>(ffmpegGetBitsPerRawSample)},
       {"ffmpegReset", "(J[B)J", reinterpret_cast<void*>(ffmpegReset)},

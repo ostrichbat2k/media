@@ -181,7 +181,15 @@ public final class FfmpegAudioDecoder
         // decoder (FLAC/ALAC/PCM) pick 16-bit or 32-bit for itself based on the real source,
         // and that choice isn't guaranteed final until a frame has actually been decoded.
         int outputEncodingBits = ffmpegGetOutputEncodingBits(nativeContext);
-        encoding = outputEncodingBits >= 32 ? C.ENCODING_PCM_32BIT : C.ENCODING_PCM_16BIT;
+        // A lossy codec's decoder can ignore OUTPUT_MODE_NATIVE_INTEGER's 16-bit
+        // request_sample_fmt hint and decode natively to float regardless (AAC/Vorbis/MP3/Opus
+        // all do) -- in that case the bytes genuinely written are IEEE 754 float, not integer
+        // PCM, and reporting ENCODING_PCM_32BIT purely because the width happens to be 32 would
+        // have every downstream consumer reinterpret real float samples as integers.
+        encoding =
+            ffmpegGetOutputIsFloat(nativeContext)
+                ? C.ENCODING_PCM_FLOAT
+                : (outputEncodingBits >= 32 ? C.ENCODING_PCM_32BIT : C.ENCODING_PCM_16BIT);
         // bits_per_raw_sample is 0 for a codec that never sets it (e.g. raw PCM, which has no
         // narrower "real" depth to report beyond its own container width) -- fall back to the
         // container width itself rather than exposing that 0 as if it meant something.
@@ -377,6 +385,8 @@ public final class FfmpegAudioDecoder
   private native int ffmpegGetSampleRate(long context);
 
   private native int ffmpegGetOutputEncodingBits(long context);
+
+  private native boolean ffmpegGetOutputIsFloat(long context);
 
   private native int ffmpegGetBitsPerRawSample(long context);
 
