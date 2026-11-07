@@ -330,7 +330,6 @@ public final class ProgressiveMediaSource extends BaseMediaSource
       LoadErrorHandlingPolicy errorHandlingPolicy = loadErrorHandlingPolicy;
       int checkIntervalBytes = continueLoadingCheckIntervalBytes;
       boolean loadSelectedTracks = loadOnlySelectedTracks;
-      boolean enableHagcPlayback = experimentalEnableHagcPlayback;
       int trackId = singleTrackId;
       @Nullable Format trackFormat = singleTrackFormat;
       @Nullable Supplier<ReleasableExecutor> executorSupplier = downloadExecutorSupplier;
@@ -345,7 +344,6 @@ public final class ProgressiveMediaSource extends BaseMediaSource
                   errorHandlingPolicy,
                   checkIntervalBytes,
                   loadSelectedTracks,
-                  enableHagcPlayback,
                   trackId,
                   trackFormat,
                   executorSupplier));

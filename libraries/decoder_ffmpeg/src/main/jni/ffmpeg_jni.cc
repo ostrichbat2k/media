@@ -141,9 +141,9 @@ jboolean ffmpegHasDecoder(JNIEnv* env, jobject thiz, jstring codecName) {
   return getCodecByName(env, codecName) != NULL;
 }
 
-AUDIO_DECODER_FUNC(jlong, ffmpegInitialize, jstring codecName,
-                   jbyteArray extraData, jint outputMode,
-                   jint rawSampleRate, jint rawChannelCount) {
+jlong ffmpegInitialize(JNIEnv* env, jobject thiz, jstring codecName,
+                       jbyteArray extraData, jint outputMode,
+                       jint rawSampleRate, jint rawChannelCount) {
   const AVCodec* codec = getCodecByName(env, codecName);
   if (!codec) {
     LOGE("Codec not found.");
@@ -223,7 +223,7 @@ jint ffmpegGetSampleRate(JNIEnv* env, jobject thiz, jlong context) {
 // frame header is parsed. Called from Java only after at least one successful ffmpegDecode()
 // call (mirroring how ffmpegGetChannelCount/ffmpegGetSampleRate are already only trusted post-
 // decode), so it is always accurate by the time it's read.
-AUDIO_DECODER_FUNC(jint, ffmpegGetOutputEncodingBits, jlong context) {
+jint ffmpegGetOutputEncodingBits(JNIEnv* env, jobject thiz, jlong context) {
   if (!context) {
     LOGE("Context must be non-NULL.");
     return 16;
@@ -237,7 +237,7 @@ AUDIO_DECODER_FUNC(jint, ffmpegGetOutputEncodingBits, jlong context) {
 // ffmpegGetOutputEncodingBits returns 32 for both -- but bits_per_raw_sample keeps tracking the
 // real value (e.g. 24) separately, same as FLAC's own flac_set_bps already does internally. Only
 // meaningful once a frame has been decoded, same as ffmpegGetOutputEncodingBits.
-AUDIO_DECODER_FUNC(jint, ffmpegGetBitsPerRawSample, jlong context) {
+jint ffmpegGetBitsPerRawSample(JNIEnv* env, jobject thiz, jlong context) {
   if (!context) {
     LOGE("Context must be non-NULL.");
     return 0;
@@ -245,7 +245,8 @@ AUDIO_DECODER_FUNC(jint, ffmpegGetBitsPerRawSample, jlong context) {
   return (jint)((AVCodecContext*)context)->bits_per_raw_sample;
 }
 
-AUDIO_DECODER_FUNC(jlong, ffmpegReset, jlong jContext, jbyteArray extraData) {
+jlong ffmpegReset(JNIEnv* env, jobject thiz, jlong jContext,
+                  jbyteArray extraData) {
   AVCodecContext* context = (AVCodecContext*)jContext;
   if (!context) {
     LOGE("Tried to reset without a context.");
@@ -486,7 +487,7 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved) {
     return -1;
   }
   static const JNINativeMethod kFfmpegAudioDecoderMethods[] = {
-      {"ffmpegInitialize", "(Ljava/lang/String;[BZII)J",
+      {"ffmpegInitialize", "(Ljava/lang/String;[BIII)J",
        reinterpret_cast<void*>(ffmpegInitialize)},
       {"ffmpegDecode",
        "(JLjava/nio/ByteBuffer;ILandroidx/media3/decoder/"
@@ -496,6 +497,10 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved) {
        reinterpret_cast<void*>(ffmpegGetChannelCount)},
       {"ffmpegGetSampleRate", "(J)I",
        reinterpret_cast<void*>(ffmpegGetSampleRate)},
+      {"ffmpegGetOutputEncodingBits", "(J)I",
+       reinterpret_cast<void*>(ffmpegGetOutputEncodingBits)},
+      {"ffmpegGetBitsPerRawSample", "(J)I",
+       reinterpret_cast<void*>(ffmpegGetBitsPerRawSample)},
       {"ffmpegReset", "(J[B)J", reinterpret_cast<void*>(ffmpegReset)},
       {"ffmpegRelease", "(J)V", reinterpret_cast<void*>(ffmpegRelease)},
   };
