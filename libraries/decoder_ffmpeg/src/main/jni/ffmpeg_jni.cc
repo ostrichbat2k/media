@@ -39,27 +39,6 @@ extern "C" {
 #define LOGD(...) \
   ((void)__android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__))
 
-#define LIBRARY_FUNC(RETURN_TYPE, NAME, ...)                               \
-  extern "C" {                                                             \
-  JNIEXPORT RETURN_TYPE                                                    \
-  Java_androidx_media3_decoder_ffmpeg_FfmpegLibrary_##NAME(JNIEnv* env,    \
-                                                           jobject thiz,   \
-                                                           ##__VA_ARGS__); \
-  }                                                                        \
-  JNIEXPORT RETURN_TYPE                                                    \
-  Java_androidx_media3_decoder_ffmpeg_FfmpegLibrary_##NAME(                \
-      JNIEnv* env, jobject thiz, ##__VA_ARGS__)
-
-#define AUDIO_DECODER_FUNC(RETURN_TYPE, NAME, ...)               \
-  extern "C" {                                                   \
-  JNIEXPORT RETURN_TYPE                                          \
-  Java_androidx_media3_decoder_ffmpeg_FfmpegAudioDecoder_##NAME( \
-      JNIEnv* env, jobject thiz, ##__VA_ARGS__);                 \
-  }                                                              \
-  JNIEXPORT RETURN_TYPE                                          \
-  Java_androidx_media3_decoder_ffmpeg_FfmpegAudioDecoder_##NAME( \
-      JNIEnv* env, jobject thiz, ##__VA_ARGS__)
-
 #define ERROR_STRING_BUFFER_LENGTH 256
 
 // Output format corresponding to AudioFormat.ENCODING_PCM_16BIT.
@@ -150,44 +129,21 @@ void logError(const char* functionName, int errorNumber);
  */
 void releaseContext(AVCodecContext* context);
 
-jint JNI_OnLoad(JavaVM* vm, void* reserved) {
-  JNIEnv* env;
-  if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
-    LOGE("JNI_OnLoad: GetEnv failed");
-    return -1;
-  }
-  jclass clazz =
-      env->FindClass("androidx/media3/decoder/ffmpeg/FfmpegAudioDecoder");
-  if (!clazz) {
-    LOGE("JNI_OnLoad: FindClass failed");
-    return -1;
-  }
-  growOutputBufferMethod =
-      env->GetMethodID(clazz, "growOutputBuffer",
-                       "(Landroidx/media3/decoder/"
-                       "SimpleDecoderOutputBuffer;I)Ljava/nio/ByteBuffer;");
-  if (!growOutputBufferMethod) {
-    LOGE("JNI_OnLoad: GetMethodID failed");
-    return -1;
-  }
-  return JNI_VERSION_1_6;
-}
-
-LIBRARY_FUNC(jstring, ffmpegGetVersion) {
+jstring ffmpegGetVersion(JNIEnv* env, jobject thiz) {
   return env->NewStringUTF(LIBAVCODEC_IDENT);
 }
 
-LIBRARY_FUNC(jint, ffmpegGetInputBufferPaddingSize) {
+jint ffmpegGetInputBufferPaddingSize(JNIEnv* env, jobject thiz) {
   return (jint)AV_INPUT_BUFFER_PADDING_SIZE;
 }
 
-LIBRARY_FUNC(jboolean, ffmpegHasDecoder, jstring codecName) {
+jboolean ffmpegHasDecoder(JNIEnv* env, jobject thiz, jstring codecName) {
   return getCodecByName(env, codecName) != NULL;
 }
 
-AUDIO_DECODER_FUNC(jlong, ffmpegInitialize, jstring codecName,
-                   jbyteArray extraData, jint outputMode,
-                   jint rawSampleRate, jint rawChannelCount) {
+jlong ffmpegInitialize(JNIEnv* env, jobject thiz, jstring codecName,
+                       jbyteArray extraData, jint outputMode,
+                       jint rawSampleRate, jint rawChannelCount) {
   const AVCodec* codec = getCodecByName(env, codecName);
   if (!codec) {
     LOGE("Codec not found.");
@@ -197,9 +153,9 @@ AUDIO_DECODER_FUNC(jlong, ffmpegInitialize, jstring codecName,
                               rawChannelCount);
 }
 
-AUDIO_DECODER_FUNC(jint, ffmpegDecode, jlong context, jobject inputData,
-                   jint inputSize, jobject decoderOutputBuffer,
-                   jobject outputData, jint outputSize) {
+jint ffmpegDecode(JNIEnv* env, jobject thiz, jlong context, jobject inputData,
+                  jint inputSize, jobject decoderOutputBuffer,
+                  jobject outputData, jint outputSize) {
   if (!context) {
     LOGE("Context must be non-NULL.");
     return -1;
@@ -243,7 +199,7 @@ uint8_t* GrowOutputBufferCallback::operator()(int requiredSize) const {
   return static_cast<uint8_t*>(env->GetDirectBufferAddress(newOutputData));
 }
 
-AUDIO_DECODER_FUNC(jint, ffmpegGetChannelCount, jlong context) {
+jint ffmpegGetChannelCount(JNIEnv* env, jobject thiz, jlong context) {
   if (!context) {
     LOGE("Context must be non-NULL.");
     return -1;
@@ -251,7 +207,7 @@ AUDIO_DECODER_FUNC(jint, ffmpegGetChannelCount, jlong context) {
   return ((AVCodecContext*)context)->ch_layout.nb_channels;
 }
 
-AUDIO_DECODER_FUNC(jint, ffmpegGetSampleRate, jlong context) {
+jint ffmpegGetSampleRate(JNIEnv* env, jobject thiz, jlong context) {
   if (!context) {
     LOGE("Context must be non-NULL.");
     return -1;
@@ -267,7 +223,7 @@ AUDIO_DECODER_FUNC(jint, ffmpegGetSampleRate, jlong context) {
 // frame header is parsed. Called from Java only after at least one successful ffmpegDecode()
 // call (mirroring how ffmpegGetChannelCount/ffmpegGetSampleRate are already only trusted post-
 // decode), so it is always accurate by the time it's read.
-AUDIO_DECODER_FUNC(jint, ffmpegGetOutputEncodingBits, jlong context) {
+jint ffmpegGetOutputEncodingBits(JNIEnv* env, jobject thiz, jlong context) {
   if (!context) {
     LOGE("Context must be non-NULL.");
     return 16;
@@ -281,7 +237,7 @@ AUDIO_DECODER_FUNC(jint, ffmpegGetOutputEncodingBits, jlong context) {
 // ffmpegGetOutputEncodingBits returns 32 for both -- but bits_per_raw_sample keeps tracking the
 // real value (e.g. 24) separately, same as FLAC's own flac_set_bps already does internally. Only
 // meaningful once a frame has been decoded, same as ffmpegGetOutputEncodingBits.
-AUDIO_DECODER_FUNC(jint, ffmpegGetBitsPerRawSample, jlong context) {
+jint ffmpegGetBitsPerRawSample(JNIEnv* env, jobject thiz, jlong context) {
   if (!context) {
     LOGE("Context must be non-NULL.");
     return 0;
@@ -289,7 +245,8 @@ AUDIO_DECODER_FUNC(jint, ffmpegGetBitsPerRawSample, jlong context) {
   return (jint)((AVCodecContext*)context)->bits_per_raw_sample;
 }
 
-AUDIO_DECODER_FUNC(jlong, ffmpegReset, jlong jContext, jbyteArray extraData) {
+jlong ffmpegReset(JNIEnv* env, jobject thiz, jlong jContext,
+                  jbyteArray extraData) {
   AVCodecContext* context = (AVCodecContext*)jContext;
   if (!context) {
     LOGE("Tried to reset without a context.");
@@ -316,7 +273,7 @@ AUDIO_DECODER_FUNC(jlong, ffmpegReset, jlong jContext, jbyteArray extraData) {
   return (jlong)context;
 }
 
-AUDIO_DECODER_FUNC(void, ffmpegRelease, jlong context) {
+void ffmpegRelease(JNIEnv* env, jobject thiz, jlong context) {
   if (context) {
     releaseContext((AVCodecContext*)context);
   }
@@ -507,4 +464,73 @@ void releaseContext(AVCodecContext* context) {
     context->opaque = NULL;
   }
   avcodec_free_context(&context);
+}
+
+jint JNI_OnLoad(JavaVM* vm, void* reserved) {
+  JNIEnv* env;
+  if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
+    LOGE("JNI_OnLoad: GetEnv failed");
+    return -1;
+  }
+  jclass clazz =
+      env->FindClass("androidx/media3/decoder/ffmpeg/FfmpegAudioDecoder");
+  if (!clazz) {
+    LOGE("JNI_OnLoad: FindClass failed");
+    return -1;
+  }
+  growOutputBufferMethod =
+      env->GetMethodID(clazz, "growOutputBuffer",
+                       "(Landroidx/media3/decoder/"
+                       "SimpleDecoderOutputBuffer;I)Ljava/nio/ByteBuffer;");
+  if (!growOutputBufferMethod) {
+    LOGE("JNI_OnLoad: GetMethodID failed");
+    return -1;
+  }
+  static const JNINativeMethod kFfmpegAudioDecoderMethods[] = {
+      {"ffmpegInitialize", "(Ljava/lang/String;[BIII)J",
+       reinterpret_cast<void*>(ffmpegInitialize)},
+      {"ffmpegDecode",
+       "(JLjava/nio/ByteBuffer;ILandroidx/media3/decoder/"
+       "SimpleDecoderOutputBuffer;Ljava/nio/ByteBuffer;I)I",
+       reinterpret_cast<void*>(ffmpegDecode)},
+      {"ffmpegGetChannelCount", "(J)I",
+       reinterpret_cast<void*>(ffmpegGetChannelCount)},
+      {"ffmpegGetSampleRate", "(J)I",
+       reinterpret_cast<void*>(ffmpegGetSampleRate)},
+      {"ffmpegGetOutputEncodingBits", "(J)I",
+       reinterpret_cast<void*>(ffmpegGetOutputEncodingBits)},
+      {"ffmpegGetBitsPerRawSample", "(J)I",
+       reinterpret_cast<void*>(ffmpegGetBitsPerRawSample)},
+      {"ffmpegReset", "(J[B)J", reinterpret_cast<void*>(ffmpegReset)},
+      {"ffmpegRelease", "(J)V", reinterpret_cast<void*>(ffmpegRelease)},
+  };
+  if (env->RegisterNatives(clazz, kFfmpegAudioDecoderMethods,
+                           sizeof(kFfmpegAudioDecoderMethods) /
+                               sizeof(kFfmpegAudioDecoderMethods[0])) < 0) {
+    LOGE("JNI_OnLoad: RegisterNatives failed for FfmpegAudioDecoder");
+    return -1;
+  }
+
+  jclass libraryClazz =
+      env->FindClass("androidx/media3/decoder/ffmpeg/FfmpegLibrary");
+  if (!libraryClazz) {
+    LOGE("JNI_OnLoad: FindClass failed for FfmpegLibrary");
+    return -1;
+  }
+  static const JNINativeMethod kFfmpegLibraryMethods[] = {
+      {"ffmpegGetVersion", "()Ljava/lang/String;",
+       reinterpret_cast<void*>(ffmpegGetVersion)},
+      {"ffmpegGetInputBufferPaddingSize", "()I",
+       reinterpret_cast<void*>(ffmpegGetInputBufferPaddingSize)},
+      {"ffmpegHasDecoder", "(Ljava/lang/String;)Z",
+       reinterpret_cast<void*>(ffmpegHasDecoder)},
+  };
+  if (env->RegisterNatives(libraryClazz, kFfmpegLibraryMethods,
+                           sizeof(kFfmpegLibraryMethods) /
+                               sizeof(kFfmpegLibraryMethods[0])) < 0) {
+    LOGE("JNI_OnLoad: RegisterNatives failed for FfmpegLibrary");
+    return -1;
+  }
+
+  return JNI_VERSION_1_6;
 }
